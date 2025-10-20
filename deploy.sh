@@ -1,33 +1,33 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-# Usage: ./deploy.sh <branch>   (branch: dev or prod)
+# Usage: ./deploy.sh dev|main
 BRANCH=${1:-dev}
 EC2_USER=${EC2_USER:-ubuntu}
-EC2_IP=${EC2_IP:-x.x.x.x}
+EC2_IP=${EC2_IP:-<EC2_PUBLIC_IP>}
 SSH_KEY=${SSH_KEY:-~/.ssh/id_rsa}
 DOCKERHUB_USER=${DOCKERHUB_USER:-your_dockerhub_username}
 REMOTE_DIR="/home/${EC2_USER}/app"
 
-IMAGE_TAG="${DOCKERHUB_USER}/devops-build:${BRANCH}-latest"
+IMAGE_NAME="${DOCKERHUB_USER}/devops-build:${BRANCH}-latest"
 
-echo "Deploying ${IMAGE_TAG} to ${EC2_USER}@${EC2_IP} ..."
+echo "Deploying ${IMAGE_NAME} to ${EC2_USER}@${EC2_IP}"
 
-# make remote dir
+# Create remote directory
 ssh -i "${SSH_KEY}" "${EC2_USER}@${EC2_IP}" "mkdir -p ${REMOTE_DIR}"
 
-# create docker-compose.yml on remote
+# Copy docker-compose.yml to remote
 cat <<EOF | ssh -i "${SSH_KEY}" "${EC2_USER}@${EC2_IP}" "cat > ${REMOTE_DIR}/docker-compose.yml"
 version: "3.8"
 services:
   web:
-    image: ${IMAGE_TAG}
+    image: ${IMAGE_NAME}
     ports:
       - "80:80"
     restart: unless-stopped
 EOF
 
-# Pull & up on remote
+# Pull & run container remotely
 ssh -i "${SSH_KEY}" "${EC2_USER}@${EC2_IP}" <<EOF
 cd ${REMOTE_DIR}
 docker login
@@ -35,4 +35,5 @@ docker-compose pull || true
 docker-compose up -d --remove-orphans
 EOF
 
-echo "Deploy invoked. Visit http://${EC2_IP}/"
+echo "Deployment completed. Visit http://${EC2_IP}"
+

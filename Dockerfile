@@ -1,9 +1,15 @@
-# Dockerfile
-FROM nginx:stable-alpine
-# remove default nginx site
+# Use Nginx to serve static React files
+FROM nginx:alpine
+
+# Remove default nginx content
 RUN rm -rf /usr/share/nginx/html/*
-# copy build output or static files to nginx html
+
+# Copy app files into nginx html folder
 COPY . /usr/share/nginx/html
-# ensure nginx listens on 80 (default)
+
+# Expose port 80
 EXPOSE 80
+
+# Start nginx
 CMD ["nginx", "-g", "daemon off;"]
+
