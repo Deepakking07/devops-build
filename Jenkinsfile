@@ -1,81 +1,73 @@
-// Jenkinsfile
 pipeline {
-  agent any
+    agent any
 
-  environment {
-    DOCKERHUB_USER = 'deepakk007'                       // your Docker Hub username
-    DEV_REPO = "${DOCKERHUB_USER}/devops-build-dev"
-    PROD_REPO = "${DOCKERHUB_USER}/devops-build-prod"
-    REMOTE_DIR = "/home/ubuntu/app"
-    EC2_IP = '13.221.255.202'                           // your EC2 public IP
-  }
-
-  stages {
-    stage('Checkout') {
-      steps {
-        checkout scm
-      }
+    environment {
+        DOCKERHUB_CREDENTIALS = credentials('dockerhub-creds')  // Your Docker Hub credentials ID
+        DOCKER_DEV_REPO = "deepakk007/devops-build-dev"
+        DOCKER_PROD_REPO = "deepakk007/devops-build-prod"
+        EC2_USER = "ubuntu"
+        EC2_HOST = "13.221.255.202"
+        SSH_KEY = credentials('ec2-ssh-key')  // Your EC2 SSH key credentials ID
     }
 
-    stage('Prepare') {
-      steps {
-        script {
-          BR = env.BRANCH_NAME ?: (env.GIT_BRANCH?.tokenize('/')[-1] ?: 'dev')
-          echo "Branch detected: ${BR}"
-          IMAGE_TAG = (BR == 'main') ? "${PROD_REPO}:prod-latest" : "${DEV_REPO}:dev-latest"
-          echo "Image to build: ${IMAGE_TAG}"
+    stages {
+        stage('Checkout Code') {
+            steps {
+                git branch: env.BRANCH_NAME ?: 'dev', url: 'https://github.com/Deepakking07/devops-build.git', credentialsId: 'github-creds'
+            }
         }
-      }
-    }
 
-    stage('Build Image') {
-      steps {
-        sh "docker build -t ${IMAGE_TAG} ."
-      }
-    }
-
-    stage('Docker Login & Push') {
-      steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-          sh '''
-            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-            docker push ${IMAGE_TAG}
-          '''
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    IMAGE_TAG = (env.BRANCH_NAME == 'main') ? "${DOCKER_PROD_REPO}:latest" : "${DOCKER_DEV_REPO}:latest"
+                    sh "docker build -t ${IMAGE_TAG} ."
+                }
+            }
         }
-      }
-    }
 
-    stage('Deploy to EC2') {
-      steps {
-        sshagent(['ec2-ssh-key']) {
-          script {
-            sh """
-            ssh -o StrictHostKeyChecking=no ubuntu@${EC2_IP} 'mkdir -p ${REMOTE_DIR}'
-            ssh -o StrictHostKeyChecking=no ubuntu@${EC2_IP} "cat > ${REMOTE_DIR}/docker-compose.yml <<'YAML'
-version: '3.8'
-services:
-  web:
-    image: ${IMAGE_TAG}
-    ports:
-      - '80:80'
-    restart: unless-stopped
-YAML"
-            ssh -o StrictHostKeyChecking=no ubuntu@${EC2_IP} "cd ${REMOTE_DIR} && docker-compose pull || true && docker-compose up -d --remove-orphans"
-            """
-          }
+        stage('Push to DockerHub') {
+            when {
+                anyOf {
+                    branch 'dev'
+                    branch 'main'
+                }
+            }
+            steps {
+                script {
+                    docker.withRegistry('', 'dockerhub-creds') {
+                        sh "docker push ${IMAGE_TAG}"
+                    }
+                }
+            }
         }
-      }
+
+        stage('Deploy to EC2') {
+            when {
+                branch 'main'
+            }
+            steps {
+                sshagent(['ec2-ssh-key']) {
+                    sh """
+                    ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} '
+                    docker pull ${DOCKER_PROD_REPO}:latest &&
+                    docker stop app || true &&
+                    docker rm app || true &&
+                    docker run -d -p 80:80 --name app ${DOCKER_PROD_REPO}:latest
+                    '
+                    """
+                }
+            }
+        }
     }
 
-    stage('Cleanup') {
-      steps {
-        sh "docker image prune -f || true"
-      }
+    post {
+        success {
+            echo "✅ Build & Deploy successful for ${env.BRANCH_NAME}"
+        }
+        failure {
+            echo "❌ Build failed for ${env.BRANCH_NAME}"
+        }
     }
-  }
-
-  post {
-    success { echo "✅ Pipeline completed successfully for branch ${BR}" }
-    failure { echo "❌ Pipeline failed for branch ${BR}" }
-  }
 }
+
