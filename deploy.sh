@@ -6,19 +6,28 @@ BRANCH=${1:-dev}
 EC2_USER=${EC2_USER:-ubuntu}
 EC2_IP=${EC2_IP:-<EC2_PUBLIC_IP>}
 SSH_KEY=${SSH_KEY:-~/.ssh/id_rsa}
-DOCKERHUB_USER=${DOCKERHUB_USER:-your_dockerhub_username}
+DOCKERHUB_USER=${DOCKERHUB_USER:-deepakk007}
+DOCKERHUB_PASS=${DOCKERHUB_PASS:-""}
 REMOTE_DIR="/home/${EC2_USER}/app"
 
-IMAGE_NAME="${DOCKERHUB_USER}/devops-build:${BRANCH}-latest"
+# Choose Docker image repo name
+if [ "$BRANCH" = "main" ]; then
+    REPO_NAME="devops-build-prod"
+else
+    REPO_NAME="devops-build-dev"
+fi
 
-echo "Deploying ${IMAGE_NAME} to ${EC2_USER}@${EC2_IP}"
+IMAGE_NAME="${DOCKERHUB_USER}/${REPO_NAME}:${BRANCH}-latest"
 
-# Create remote directory
+echo "🚀 Deploying ${IMAGE_NAME} to ${EC2_USER}@${EC2_IP}"
+
+# 1️⃣ Create remote directory if not exists
 ssh -i "${SSH_KEY}" "${EC2_USER}@${EC2_IP}" "mkdir -p ${REMOTE_DIR}"
 
-# Copy docker-compose.yml to remote
+# 2️⃣ Send docker-compose.yml dynamically
 cat <<EOF | ssh -i "${SSH_KEY}" "${EC2_USER}@${EC2_IP}" "cat > ${REMOTE_DIR}/docker-compose.yml"
 version: "3.8"
+
 services:
   web:
     image: ${IMAGE_NAME}
@@ -27,13 +36,28 @@ services:
     restart: unless-stopped
 EOF
 
-# Pull & run container remotely
-ssh -i "${SSH_KEY}" "${EC2_USER}@${EC2_IP}" <<EOF
+# 3️⃣ Deploy container remotely
+ssh -i "${SSH_KEY}" "${EC2_USER}@${EC2_IP}" bash -s <<EOF
+set -e
 cd ${REMOTE_DIR}
-docker login
-docker-compose pull || true
-docker-compose up -d --remove-orphans
+
+echo "🧹 Cleaning up old containers..."
+docker compose down || true
+
+# Docker login (non-interactive if creds are set)
+if [ -n "$DOCKERHUB_PASS" ]; then
+  echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
+else
+  docker login
+fi
+
+echo "📥 Pulling latest image..."
+docker compose pull
+
+echo "🚀 Starting new container..."
+docker compose up -d
+
 EOF
 
-echo "Deployment completed. Visit http://${EC2_IP}"
+echo "✅ Deployment complete! Visit: http://${EC2_IP}"
 

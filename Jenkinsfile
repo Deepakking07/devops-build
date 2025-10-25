@@ -9,7 +9,7 @@ pipeline {
 
         // EC2 deployment details
         EC2_USER = "ubuntu"
-        EC2_HOST = "YOUR_EC2_PUBLIC_IP"  // Replace with your EC2 IP or store as credential
+        EC2_HOST = "3.95.63.76"  // Replace with your EC2 public IP
         SSH_KEY = credentials('ec2-ssh-key')
     }
 
@@ -19,7 +19,7 @@ pipeline {
             steps {
                 script {
                     def branchName = env.BRANCH_NAME ?: "dev"
-                    echo "Building branch: ${branchName}"
+                    echo "📦 Checking out branch: ${branchName}"
                     git branch: branchName,
                         url: 'https://github.com/Deepakking07/devops-build.git',
                         credentialsId: 'github-creds'
@@ -29,6 +29,7 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
+                echo "🛠️ Building Docker image..."
                 sh 'docker build -t devops-app:latest .'
             }
         }
@@ -37,12 +38,19 @@ pipeline {
             steps {
                 script {
                     docker.withRegistry('', 'dockerhub-credentials') {
-                        if (env.BRANCH_NAME == 'dev' || env.BRANCH_NAME == null) {
-                            sh "docker tag devops-app:latest ${DOCKER_DEV_REPO}:latest"
-                            sh "docker push ${DOCKER_DEV_REPO}:latest"
-                        } else if (env.BRANCH_NAME == 'main') {
-                            sh "docker tag devops-app:latest ${DOCKER_PROD_REPO}:latest"
-                            sh "docker push ${DOCKER_PROD_REPO}:latest"
+                        def branchName = env.BRANCH_NAME ?: "dev"
+                        if (branchName == 'main') {
+                            echo "📤 Pushing to Production repo: ${DOCKER_PROD_REPO}"
+                            sh """
+                                docker tag devops-app:latest ${DOCKER_PROD_REPO}:latest
+                                docker push ${DOCKER_PROD_REPO}:latest
+                            """
+                        } else {
+                            echo "📤 Pushing to Dev repo: ${DOCKER_DEV_REPO}"
+                            sh """
+                                docker tag devops-app:latest ${DOCKER_DEV_REPO}:latest
+                                docker push ${DOCKER_DEV_REPO}:latest
+                            """
                         }
                     }
                 }
@@ -50,12 +58,15 @@ pipeline {
         }
 
         stage('Deploy to EC2') {
-            when { branch 'main' }
+            when {
+                branch 'main'
+            }
             steps {
+                echo "🚀 Deploying to EC2..."
                 sshagent(['ec2-ssh-key']) {
                     sh """
                     ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} '
-                        echo "${DOCKERHUB_CREDENTIALS_PSW}" | docker login -u deepakk007 --password-stdin &&
+                        echo "${DOCKERHUB_CREDENTIALS_PSW}" | docker login -u ${DOCKERHUB_CREDENTIALS_USR} --password-stdin &&
                         docker pull ${DOCKER_PROD_REPO}:latest &&
                         docker stop devops-app || true &&
                         docker rm devops-app || true &&
@@ -67,17 +78,19 @@ pipeline {
         }
 
         stage('Health Check') {
-            when { branch 'main' }
+            when {
+                branch 'main'
+            }
             steps {
+                echo "🩺 Checking application health..."
                 sshagent(['ec2-ssh-key']) {
                     sh """
                     ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} '
-                        STATUS=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost)
-                        if [ \$STATUS -ne 200 ]; then
+                        if ! curl -s http://localhost:80 > /dev/null; then
                             echo "⚠️ Application is DOWN!"
                             exit 1
                         else
-                            echo "✅ Application is running"
+                            echo "✅ Application is running successfully."
                         fi
                     '
                     """
@@ -88,10 +101,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ Build & Deploy successful for ${env.BRANCH_NAME ?: 'dev'}"
+            echo "✅ Build & Deploy successful for branch: ${env.BRANCH_NAME ?: 'dev'}"
         }
         failure {
-            echo "❌ Build or deploy failed for ${env.BRANCH_NAME ?: 'dev'}"
+            echo "❌ Build or Deploy failed for branch: ${env.BRANCH_NAME ?: 'dev'}"
         }
     }
 }
