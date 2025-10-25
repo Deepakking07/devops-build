@@ -3,8 +3,11 @@ pipeline {
 
     environment {
         DOCKERHUB_CREDENTIALS = credentials('dockerhub-credentials')
-        DOCKER_DEV_REPO = "your_dockerhub_username/dev"
-        DOCKER_PROD_REPO = "your_dockerhub_username/prod"
+        DOCKER_DEV_REPO = "deepakk007/devops-build-dev"
+        DOCKER_PROD_REPO = "deepakk007/devops-build-prod"
+        EC2_USER = "ubuntu"
+        EC2_HOST = "3.95.63.76"
+        SSH_KEY = credentials('ec2-ssh-key')
     }
 
     stages {
@@ -12,89 +15,86 @@ pipeline {
         stage('Checkout Code') {
             steps {
                 script {
-                    // Detect current branch correctly even if Jenkins is in detached HEAD
+                    // Try multiple methods to detect the branch correctly
                     def branch = sh(
-                        script: 'git symbolic-ref --short -q HEAD || git name-rev --name-only HEAD || echo ${GIT_BRANCH}',
+                        script: '''
+                            git symbolic-ref --short -q HEAD || \
+                            git rev-parse --abbrev-ref HEAD || \
+                            git name-rev --name-only HEAD
+                        ''',
                         returnStdout: true
                     ).trim()
 
+                    // Normalize branch names
+                    branch = branch.replaceAll('^origin/', '')
+                    branch = branch.replaceAll('^remotes/origin/', '')
+
                     echo "📦 Branch detected: ${branch}"
-
-                    // Re-checkout the right branch
-                    checkout([$class: 'GitSCM',
-                              branches: [[name: "*/${branch}"]],
-                              userRemoteConfigs: [[url: 'https://github.com/Deepakking07/devops-build.git', credentialsId: 'github-creds']]])
-
                     env.CURRENT_BRANCH = branch
+
+                    // Checkout the correct branch explicitly
+                    checkout([$class: 'GitSCM',
+                        branches: [[name: "*/${branch}"]],
+                        userRemoteConfigs: [[url: 'https://github.com/Deepakking07/devops-build.git', credentialsId: 'github-creds']]
+                    ])
                 }
             }
         }
 
         stage('Build Docker Image') {
-            when {
-                anyOf {
-                    branch 'dev'
-                    branch 'main'
-                }
-            }
             steps {
-                script {
-                    echo "🐳 Building Docker image for branch: ${env.CURRENT_BRANCH}"
-                    sh "docker build -t ${DOCKER_DEV_REPO}:${env.CURRENT_BRANCH} ."
-                }
+                echo "🛠️ Building Docker image..."
+                sh 'docker build -t devops-app:latest .'
             }
         }
 
         stage('Push Docker Image') {
-            when {
-                anyOf {
-                    branch 'dev'
-                    branch 'main'
-                }
-            }
             steps {
                 script {
-                    echo "📤 Pushing Docker image for branch: ${env.CURRENT_BRANCH}"
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        sh '''
-                            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                            docker push ${DOCKER_DEV_REPO}:${CURRENT_BRANCH}
-                        '''
-                    }
+                    def repo = env.CURRENT_BRANCH == 'main' ? env.DOCKER_PROD_REPO : env.DOCKER_DEV_REPO
+                    echo "📤 Pushing Docker image to ${repo}"
+                    sh """
+                        docker tag devops-app:latest ${repo}:latest
+                        echo $DOCKERHUB_CREDENTIALS_PSW | docker login -u $DOCKERHUB_CREDENTIALS --password-stdin
+                        docker push ${repo}:latest
+                    """
                 }
             }
         }
 
         stage('Deploy to EC2') {
             when {
-                branch 'main'
+                expression { return env.CURRENT_BRANCH == 'main' }
             }
             steps {
-                script {
-                    echo "🚀 Deploying to EC2 for production branch: ${env.CURRENT_BRANCH}"
-                    // Example deployment step
-                    sh 'echo "Deploying application on EC2 instance..."'
+                sshagent([env.SSH_KEY]) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} '
+                            echo "${DOCKERHUB_CREDENTIALS_PSW}" | docker login -u deepakk007 --password-stdin &&
+                            docker pull ${DOCKER_PROD_REPO}:latest &&
+                            docker stop devops-app || true &&
+                            docker rm devops-app || true &&
+                            docker run -d -p 80:80 --name devops-app ${DOCKER_PROD_REPO}:latest
+                        '
+                    """
                 }
             }
         }
 
         stage('Health Check') {
             when {
-                branch 'main'
+                expression { return env.CURRENT_BRANCH == 'main' }
             }
             steps {
-                script {
-                    echo "🩺 Running health check for production environment"
-                    // Example health check
-                    sh 'echo "Application is running fine."'
-                }
+                echo "✅ Deployment successful! Running health check..."
+                sh "curl -f http://${EC2_HOST} || echo 'Health check failed'"
             }
         }
     }
 
     post {
         success {
-            echo "✅ Pipeline completed successfully for branch: ${env.CURRENT_BRANCH}"
+            echo "🎉 Build & Deploy successful for branch: ${env.CURRENT_BRANCH}"
         }
         failure {
             echo "❌ Build or deploy failed for branch: ${env.CURRENT_BRANCH}"
