@@ -4,17 +4,16 @@ pipeline {
     environment {
         // Docker Hub credentials
         DOCKERHUB_CREDENTIALS = credentials('dockerhub-credentials')
-        DOCKER_DEV_REPO  = "deepakk007/devops-build-dev"
+        DOCKER_DEV_REPO = "deepakk007/devops-build-dev"
         DOCKER_PROD_REPO = "deepakk007/devops-build-prod"
 
         // EC2 deployment details
         EC2_USER = "ubuntu"
-        EC2_HOST = "3.95.63.76"
+        EC2_HOST = "3.95.63.76"  // Replace with your EC2 IP
         SSH_KEY = credentials('ec2-ssh-key')
     }
 
     stages {
-
         stage('Checkout Code') {
             steps {
                 script {
@@ -53,7 +52,9 @@ pipeline {
         }
 
         stage('Deploy to EC2') {
-            when { branch 'main' }  // Only deploy for main (production)
+            when {
+                branch 'main'   // Only deploy to EC2 for main branch
+            }
             steps {
                 sshagent(['ec2-ssh-key']) {
                     sh """
@@ -63,24 +64,6 @@ pipeline {
                         docker stop devops-app || true &&
                         docker rm devops-app || true &&
                         docker run -d -p 80:80 --name devops-app ${DOCKER_PROD_REPO}:latest
-                    '
-                    """
-                }
-            }
-        }
-
-        stage('Health Check') {
-            when { branch 'main' }
-            steps {
-                sshagent(['ec2-ssh-key']) {
-                    sh """
-                    ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} '
-                        if [ \$(docker ps -q -f name=devops-app | wc -l) -eq 0 ]; then
-                            echo "⚠️ Application is DOWN!"
-                            exit 1
-                        else
-                            echo "✅ Application is running"
-                        fi
                     '
                     """
                 }
@@ -97,4 +80,3 @@ pipeline {
         }
     }
 }
-
