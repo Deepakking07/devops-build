@@ -9,7 +9,7 @@ pipeline {
 
         // EC2 deployment details
         EC2_USER = "ubuntu"
-        EC2_HOST = "YOUR_EC2_PUBLIC_IP"
+        EC2_HOST = "YOUR_EC2_PUBLIC_IP"  // Replace with your EC2 IP or store as credential
         SSH_KEY = credentials('ec2-ssh-key')
     }
 
@@ -18,7 +18,6 @@ pipeline {
         stage('Checkout Code') {
             steps {
                 script {
-                    // Checkout correct branch
                     def branchName = env.BRANCH_NAME ?: "dev"
                     echo "Building branch: ${branchName}"
                     git branch: branchName,
@@ -56,10 +55,30 @@ pipeline {
                 sshagent(['ec2-ssh-key']) {
                     sh """
                     ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} '
+                        echo "${DOCKERHUB_CREDENTIALS_PSW}" | docker login -u deepakk007 --password-stdin &&
                         docker pull ${DOCKER_PROD_REPO}:latest &&
                         docker stop devops-app || true &&
                         docker rm devops-app || true &&
                         docker run -d -p 80:80 --name devops-app ${DOCKER_PROD_REPO}:latest
+                    '
+                    """
+                }
+            }
+        }
+
+        stage('Health Check') {
+            when { branch 'main' }
+            steps {
+                sshagent(['ec2-ssh-key']) {
+                    sh """
+                    ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} '
+                        STATUS=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost)
+                        if [ \$STATUS -ne 200 ]; then
+                            echo "⚠️ Application is DOWN!"
+                            exit 1
+                        else
+                            echo "✅ Application is running"
+                        fi
                     '
                     """
                 }

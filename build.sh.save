@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Usage: ./build.sh dev|prod
+TARGET=${1:-dev}
+DOCKERHUB_USER=${DOCKERHUB_USER:-your_dockerhub_username}
+IMAGE_NAME="${DOCKERHUB_USER}/devops-build:${TARGET}-$(date +%Y%m%d%H%M)"
+
+echo "Building image ${IMAGE_NAME} ..."
+docker build -t "${IMAGE_NAME}" .
+
+echo "Tagging latest-${TARGET} ..."
+docker tag "${IMAGE_NAME}" "${DOCKERHUB_USER}/devops-build:${TARGET}-l
