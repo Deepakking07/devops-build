@@ -15,9 +15,9 @@ pipeline {
             steps {
                 checkout scm
                 script {
-                    // Detect branch properly even if detached
+                    // Detect branch correctly even if detached
                     env.BRANCH_NAME = sh(
-                        script: "git rev-parse --abbrev-ref HEAD || echo 'detached'",
+                        script: "git rev-parse --abbrev-ref HEAD || git name-rev --name-only HEAD",
                         returnStdout: true
                     ).trim()
                     echo "📦 Checked out branch: ${env.BRANCH_NAME}"
@@ -56,10 +56,7 @@ pipeline {
 
         stage('Deploy to EC2') {
             when {
-                anyOf {
-                    branch 'dev'
-                    branch 'main'
-                }
+                expression { return env.BRANCH_NAME == 'dev' || env.BRANCH_NAME == 'main' }
             }
             steps {
                 script {
@@ -79,10 +76,7 @@ pipeline {
 
         stage('Health Check') {
             when {
-                anyOf {
-                    branch 'dev'
-                    branch 'main'
-                }
+                expression { return env.BRANCH_NAME == 'dev' || env.BRANCH_NAME == 'main' }
             }
             steps {
                 script {
