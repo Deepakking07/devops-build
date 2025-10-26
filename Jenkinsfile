@@ -3,48 +3,52 @@ pipeline {
 
     environment {
         DOCKERHUB_CREDENTIALS = credentials('dockerhub-credentials')
-        DOCKER_REPO = "deepakk007/devops-build-dev"
+        DEV_IMAGE = "deepakk007/devops-build-dev"
+        PROD_IMAGE = "deepakk007/devops-build-prod"
+
+        EC2_SERVER = "ec2-user@18.234.238.124"  // your single EC2 instance
+        SSH_KEY = credentials('ec2-ssh-key')     // Jenkins SSH private key
     }
 
     stages {
-        stage('Checkout Code') {
+        stage('Checkout SCM') {
             steps {
                 checkout scm
                 script {
-                    // Determine branch name
-                    BRANCH_NAME = sh(script: "git rev-parse --abbrev-ref HEAD", returnStdout: true).trim()
-                    echo "📦 Checked out branch: ${BRANCH_NAME}"
+                    // Detect branch properly even if detached
+                    env.BRANCH_NAME = sh(
+                        script: "git rev-parse --abbrev-ref HEAD || echo 'detached'",
+                        returnStdout: true
+                    ).trim()
+                    echo "📦 Checked out branch: ${env.BRANCH_NAME}"
                 }
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                script {
-                    echo "🐳 Building Docker image..."
-                    sh "docker build -t app-image:${BRANCH_NAME} ."
-                }
+                echo "🐳 Building Docker image..."
+                sh "docker build -t app-image:${env.BRANCH_NAME} ."
             }
         }
 
         stage('Login to DockerHub') {
             steps {
-                script {
-                    echo "🔐 Logging in to DockerHub..."
-                    sh """
-                        echo ${DOCKERHUB_CREDENTIALS_PSW} | docker login -u ${DOCKERHUB_CREDENTIALS_USR} --password-stdin
-                    """
-                }
+                echo "🔐 Logging in to DockerHub..."
+                sh """
+                    echo \$DOCKERHUB_CREDENTIALS_PSW | docker login -u \$DOCKERHUB_CREDENTIALS_USR --password-stdin
+                """
             }
         }
 
         stage('Push Docker Image') {
             steps {
                 script {
-                    echo "📤 Pushing image to ${DOCKER_REPO}:${BRANCH_NAME}"
+                    def imageName = env.BRANCH_NAME == 'main' ? PROD_IMAGE : DEV_IMAGE
+                    echo "📤 Pushing image to ${imageName}:${env.BRANCH_NAME}"
                     sh """
-                        docker tag app-image:${BRANCH_NAME} ${DOCKER_REPO}:${BRANCH_NAME}
-                        docker push ${DOCKER_REPO}:${BRANCH_NAME}
+                        docker tag app-image:${env.BRANCH_NAME} ${imageName}:${env.BRANCH_NAME}
+                        docker push ${imageName}:${env.BRANCH_NAME}
                     """
                 }
             }
@@ -52,34 +56,52 @@ pipeline {
 
         stage('Deploy to EC2') {
             when {
-                expression { BRANCH_NAME == "main" }
+                anyOf {
+                    branch 'dev'
+                    branch 'main'
+                }
             }
             steps {
                 script {
-                    echo "🚀 Deploying to EC2 for branch: ${BRANCH_NAME}"
-                    // Add your SSH or deployment commands here
+                    def imageName = env.BRANCH_NAME == 'main' ? PROD_IMAGE : DEV_IMAGE
+                    echo "🚀 Deploying ${env.BRANCH_NAME} image to ${EC2_SERVER}"
+
+                    sh """
+                        ssh -i \$SSH_KEY -o StrictHostKeyChecking=no ${EC2_SERVER} \\
+                        'docker pull ${imageName}:${env.BRANCH_NAME} &&
+                         docker stop app || true &&
+                         docker rm app || true &&
+                         docker run -d --name app -p 80:80 ${imageName}:${env.BRANCH_NAME}'
+                    """
                 }
             }
         }
 
         stage('Health Check') {
             when {
-                expression { BRANCH_NAME == "main" }
+                anyOf {
+                    branch 'dev'
+                    branch 'main'
+                }
             }
             steps {
-                echo "🔍 Running Health Check for Production..."
-                // Add curl or health endpoint check commands here
+                script {
+                    echo "💡 Running health check on ${EC2_SERVER}"
+                    sh """
+                        ssh -i \$SSH_KEY -o StrictHostKeyChecking=no ${EC2_SERVER} \\
+                        'curl -f http://localhost || echo "Health check failed!"'
+                    """
+                }
             }
         }
     }
 
     post {
         success {
-            echo "✅ Pipeline succeeded for branch: ${BRANCH_NAME}"
+            echo "✅ Pipeline succeeded for branch: ${env.BRANCH_NAME}"
         }
         failure {
-            echo "❌ Build or deploy failed for branch: ${BRANCH_NAME}"
+            echo "❌ Pipeline failed for branch: ${env.BRANCH_NAME}"
         }
     }
 }
-
