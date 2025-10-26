@@ -3,12 +3,10 @@ pipeline {
 
     environment {
         DOCKERHUB_CREDENTIALS = credentials('dockerhub-credentials')
-        DOCKER_DEV_REPO = "deepakk007/devops-build-dev"
-        DOCKER_PROD_REPO = "deepakk007/devops-build-prod"
-
-        EC2_USER = "ubuntu"
-        EC2_HOST = "3.95.63.76" // Replace with your EC2 IP
-        SSH_KEY = credentials('ec2-ssh-key')
+        DOCKERHUB_USERNAME = "${DOCKERHUB_CREDENTIALS_USR}"
+        DOCKERHUB_PASSWORD = "${DOCKERHUB_CREDENTIALS_PSW}"
+        DEV_REPO = "deepakking07/devops-build-dev"
+        PROD_REPO = "deepakking07/devops-build-prod"
     }
 
     stages {
@@ -16,6 +14,8 @@ pipeline {
             steps {
                 checkout scm
                 script {
+                    // Detect branch name even in detached HEAD
+                    env.BRANCH_NAME = env.GIT_BRANCH?.replaceFirst(/^origin\//, '') ?: sh(script: "git rev-parse --abbrev-ref HEAD", returnStdout: true).trim()
                     echo "📦 Checked out branch: ${env.BRANCH_NAME}"
                 }
             }
@@ -24,8 +24,19 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    echo "🛠️ Building Docker image..."
-                    sh "docker build -t devops-app:latest ."
+                    echo "🐳 Building Docker image..."
+                    sh "docker build -t app-image:${env.BRANCH_NAME} ."
+                }
+            }
+        }
+
+        stage('Login to DockerHub') {
+            steps {
+                script {
+                    echo "🔐 Logging in to DockerHub..."
+                    sh """
+                        echo "${DOCKERHUB_PASSWORD}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
+                    """
                 }
             }
         }
@@ -33,45 +44,12 @@ pipeline {
         stage('Push Docker Image') {
             steps {
                 script {
-                    def repo = (env.BRANCH_NAME == 'main') ? env.DOCKER_PROD_REPO : env.DOCKER_DEV_REPO
-                    echo "📤 Pushing Docker image to ${repo}"
-
+                    def repo = (env.BRANCH_NAME == 'main') ? PROD_REPO : DEV_REPO
+                    echo "📤 Pushing image to ${repo}:${env.BRANCH_NAME}"
                     sh """
-                        docker tag devops-app:latest ${repo}:latest
-                        echo $DOCKERHUB_CREDENTIALS_PSW | docker login -u $DOCKERHUB_CREDENTIALS --password-stdin
-                        docker push ${repo}:latest
+                        docker tag app-image:${env.BRANCH_NAME} ${repo}:${env.BRANCH_NAME}
+                        docker push ${repo}:${env.BRANCH_NAME}
                     """
-                }
-            }
-        }
-
-        stage('Deploy to EC2') {
-            when {
-                expression { env.BRANCH_NAME == 'main' }
-            }
-            steps {
-                sshagent([SSH_KEY]) {
-                    sh """
-                        ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} '
-                        echo "${DOCKERHUB_CREDENTIALS_PSW}" | docker login -u deepakk007 --password-stdin &&
-                        docker pull ${DOCKER_PROD_REPO}:latest &&
-                        docker stop devops-app || true &&
-                        docker rm devops-app || true &&
-                        docker run -d -p 80:80 --name devops-app ${DOCKER_PROD_REPO}:latest
-                        '
-                    """
-                }
-            }
-        }
-
-        stage('Health Check') {
-            when {
-                expression { env.BRANCH_NAME == 'main' }
-            }
-            steps {
-                script {
-                    echo "✅ Running health check..."
-                    sh "curl -f http://${EC2_HOST} || echo 'Health check failed'"
                 }
             }
         }
@@ -79,10 +57,10 @@ pipeline {
 
     post {
         success {
-            echo "🎉 Build & deploy successful for branch: ${env.BRANCH_NAME}"
+            echo "✅ Build and push successful for branch: ${env.BRANCH_NAME}"
         }
         failure {
-            echo "❌ Build or deploy failed for branch: ${env.BRANCH_NAME}"
+            echo "❌ Build or deploy failed for branch: ${env.BRANCH_NAME ?: 'unknown'}"
         }
     }
 }
