@@ -14,45 +14,26 @@ pipeline {
     }
 
     stages {
-        stage('Set Branch Name') {
-            steps {
-                script {
-                    // Try to get the branch name from common environment variables
-                    def gitBranch = env.BRANCH_NAME ?: env.GIT_BRANCH
-
-                    // Fallback for Multi-branch pipeline or specific Git triggers
-                    if (!gitBranch && currentBuild?.rawBuild?.getSensitiveBuildVariables()?.get('GIT_BRANCH')) {
-                        gitBranch = currentBuild.rawBuild.getSensitiveBuildVariables().get('GIT_BRANCH').replace('origin/', '')
-                    }
-                    
-                    // Final fallback to get the branch from the workspace if a checkout already happened
-                    if (!gitBranch) {
-                        try {
-                            gitBranch = sh(script: "git rev-parse --abbrev-ref HEAD", returnStdout: true).trim()
-                        } catch (Exception e) {
-                            gitBranch = 'UNKNOWN' // Set a safe default
-                        }
-                    }
-
-                    // Set the BRANCH_NAME environment variable for the rest of the pipeline
-                    env.BRANCH_NAME = gitBranch
-                    echo "📦 Detected branch: ${env.BRANCH_NAME}"
-                }
-            }
-        }
-
         stage('Checkout Code') {
             steps {
-                // Checkout the code for the detected branch
                 checkout scm
-                echo "📦 Running pipeline for branch: ${env.BRANCH_NAME}"
+                script {
+                    // Detect branch name safely
+                    def currentBranch = env.BRANCH_NAME ?: sh(
+                        script: 'git rev-parse --abbrev-ref HEAD',
+                        returnStdout: true
+                    ).trim()
+
+                    env.ACTUAL_BRANCH = currentBranch
+                    echo "📦 Running pipeline for branch: ${env.ACTUAL_BRANCH}"
+                }
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 script {
-                    def imageName = env.BRANCH_NAME == 'main' ? PROD_IMAGE : DEV_IMAGE
+                    def imageName = env.ACTUAL_BRANCH == 'main' ? PROD_IMAGE : DEV_IMAGE
                     echo "🛠️ Building Docker image: ${imageName}:latest"
                     sh "docker build -t ${imageName}:latest ."
                 }
@@ -70,52 +51,51 @@ pipeline {
         stage('Push Docker Image') {
             steps {
                 script {
-                    def imageName = env.BRANCH_NAME == 'main' ? PROD_IMAGE : DEV_IMAGE
+                    def imageName = env.ACTUAL_BRANCH == 'main' ? PROD_IMAGE : DEV_IMAGE
                     echo "📤 Pushing Docker image: ${imageName}:latest"
-                    sh "docker push ${imageName}:latest"
+                    sh """
+                        docker tag ${imageName}:latest ${imageName}:latest
+                        docker push ${imageName}:latest
+                    """
                 }
             }
         }
 
         stage('Deploy to EC2') {
-            when {
-                // Deploy if branch is 'dev' OR 'main'
-                expression { env.BRANCH_NAME == 'dev' || env.BRANCH_NAME == 'main' }
-            }
             steps {
                 script {
-                    def imageName = env.BRANCH_NAME == 'main' ? PROD_IMAGE : DEV_IMAGE
-                    def containerName = env.BRANCH_NAME == 'main' ? "app-main" : "app-dev"
-                    // Use 8080:80 for 'dev' branch
-                    def portMapping = env.BRANCH_NAME == 'main' ? "80:80" : "8080:80" 
+                    // Only deploy for dev or main branches
+                    if (env.ACTUAL_BRANCH in ['dev', 'main']) {
+                        def imageName = env.ACTUAL_BRANCH == 'main' ? PROD_IMAGE : DEV_IMAGE
+                        def containerName = env.ACTUAL_BRANCH == 'main' ? "app-main" : "app-dev"
+                        def portMapping = env.ACTUAL_BRANCH == 'main' ? "80:80" : "8080:80"
 
-                    echo "🚀 Deploying ${env.BRANCH_NAME} container '${containerName}' on EC2 ${EC2_HOST}"
+                        echo "🚀 Deploying ${env.ACTUAL_BRANCH} container '${containerName}' on EC2 ${EC2_HOST}"
 
-                    // Ensure to use double quotes for interpolation inside the sh block 
-                    // and use the SSH_KEY variable correctly for `ssh -i`
-                    withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'SSH_KEY_FILE')]) {
                         sh """
-                            ssh -i ${SSH_KEY_FILE} -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} \\
+                            ssh -i \$SSH_KEY -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} \\
                             'docker pull ${imageName}:latest &&
-                            docker stop ${containerName} || true &&
-                            docker rm ${containerName} || true &&
-                            docker run -d --name ${containerName} -p ${portMapping} ${imageName}:latest'
+                             docker stop ${containerName} || true &&
+                             docker rm ${containerName} || true &&
+                             docker run -d --name ${containerName} -p ${portMapping} ${imageName}:latest'
                         """
+                    } else {
+                        echo "⚠️ Skipping deployment for branch: ${env.ACTUAL_BRANCH}"
                     }
                 }
             }
         }
 
         stage('Health Check') {
-            when {
-                // Health check if branch is 'dev' OR 'main'
-                expression { env.BRANCH_NAME == 'dev' || env.BRANCH_NAME == 'main' }
-            }
             steps {
                 script {
-                    def port = env.BRANCH_NAME == 'main' ? "80" : "8080"
-                    echo "💡 Running health check on ${EC2_HOST}:${port}"
-                    sh "curl -f http://${EC2_HOST}:${port} || echo 'Health check failed!'"
+                    if (env.ACTUAL_BRANCH in ['dev', 'main']) {
+                        def port = env.ACTUAL_BRANCH == 'main' ? "80" : "8080"
+                        echo "💡 Running health check on ${EC2_HOST}:${port}"
+                        sh "curl -f http://${EC2_HOST}:${port} || echo 'Health check failed!'"
+                    } else {
+                        echo "⚠️ Skipping health check for branch: ${env.ACTUAL_BRANCH}"
+                    }
                 }
             }
         }
@@ -123,10 +103,11 @@ pipeline {
 
     post {
         success {
-            echo "✅ Pipeline succeeded for branch: ${env.BRANCH_NAME}"
+            echo "✅ Pipeline succeeded for branch: ${env.ACTUAL_BRANCH}"
         }
         failure {
-            echo "❌ Pipeline failed for branch: ${env.BRANCH_NAME}"
+            echo "❌ Pipeline failed for branch: ${env.ACTUAL_BRANCH}"
         }
     }
 }
+
