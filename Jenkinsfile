@@ -7,7 +7,7 @@ pipeline {
         PROD_IMAGE = "deepakk007/devops-build-prod"
 
         EC2_USER = "ec2-user"
-        EC2_HOST = "18.234.238.124"
+        EC2_HOST = "54.90.148.128"
     }
 
     stages {
