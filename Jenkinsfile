@@ -3,29 +3,24 @@ pipeline {
 
     environment {
         DOCKERHUB_CREDENTIALS = credentials('dockerhub-credentials')
-        DOCKER_DEV_REPO = "deepakk007/devops-build-dev"
-        DOCKER_PROD_REPO = "deepakk007/devops-build-prod"
+        DEV_IMAGE = "deepakk007/devops-build-dev"
+        PROD_IMAGE = "deepakk007/devops-build-prod"
+
+        EC2_USER = "ec2-user"
+        EC2_HOST = "18.234.238.124"
     }
 
     stages {
         stage('Checkout Code') {
             steps {
-                checkout([$class: 'GitSCM',
-                    branches: [[name: "*/${env.BRANCH_NAME ?: 'dev'}"]],
-                    userRemoteConfigs: [[
-                        url: 'https://github.com/Deepakking07/devops-build.git',
-                        credentialsId: 'github-creds'
-                    ]]
-                ])
-
+                checkout scm
                 script {
-                    // Detect branch safely, even in detached HEAD state
-                    def branch = sh(script: "git rev-parse --abbrev-ref HEAD", returnStdout: true).trim()
-                    if (branch == 'HEAD') {
-                        branch = env.GIT_BRANCH?.replaceAll(/^origin\\//, '') ?: env.BRANCH_NAME ?: 'unknown'
-                    }
-                    echo "📦 Running pipeline for branch: ${branch}"
-                    env.ACTUAL_BRANCH = branch
+                    def currentBranch = env.BRANCH_NAME ?: sh(
+                        script: 'git rev-parse --abbrev-ref HEAD',
+                        returnStdout: true
+                    ).trim()
+                    env.ACTUAL_BRANCH = currentBranch
+                    echo "📦 Running pipeline for branch: ${env.ACTUAL_BRANCH}"
                 }
             }
         }
@@ -33,27 +28,27 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    def imageName = (env.ACTUAL_BRANCH == 'main') ? "${DOCKER_PROD_REPO}:latest" : "${DOCKER_DEV_REPO}:latest"
-                    echo "🛠️ Building Docker image: ${imageName}"
-                    sh "docker build -t ${imageName} ."
+                    def imageName = env.ACTUAL_BRANCH == 'main' ? PROD_IMAGE : DEV_IMAGE
+                    echo "🛠️ Building Docker image: ${imageName}:latest"
+                    sh "docker build -t ${imageName}:latest ."
                 }
             }
         }
 
         stage('Login to DockerHub') {
             steps {
-                sh '''
-                    echo $DOCKERHUB_CREDENTIALS_PSW | docker login -u $DOCKERHUB_CREDENTIALS_USR --password-stdin
-                '''
+                sh """
+                    echo \$DOCKERHUB_CREDENTIALS_PSW | docker login -u \$DOCKERHUB_CREDENTIALS_USR --password-stdin
+                """
             }
         }
 
         stage('Push Docker Image') {
             steps {
                 script {
-                    def imageName = (env.ACTUAL_BRANCH == 'main') ? "${DOCKER_PROD_REPO}:latest" : "${DOCKER_DEV_REPO}:latest"
-                    echo "📤 Pushing Docker image: ${imageName}"
-                    sh "docker push ${imageName}"
+                    def imageName = env.ACTUAL_BRANCH == 'main' ? PROD_IMAGE : DEV_IMAGE
+                    echo "📤 Pushing Docker image: ${imageName}:latest"
+                    sh "docker push ${imageName}:latest"
                 }
             }
         }
@@ -61,10 +56,22 @@ pipeline {
         stage('Deploy to EC2') {
             steps {
                 script {
-                    if (env.ACTUAL_BRANCH == 'main') {
-                        echo "🚀 Deploying to EC2 for branch: ${env.ACTUAL_BRANCH}"
-                        // Add your deployment commands below (example)
-                        // sh "ssh -i /path/to/key.pem ubuntu@<EC2-IP> 'docker pull ${DOCKER_PROD_REPO}:latest && docker run -d -p 80:80 ${DOCKER_PROD_REPO}:latest'"
+                    if (env.ACTUAL_BRANCH in ['dev', 'main']) {
+                        def imageName = env.ACTUAL_BRANCH == 'main' ? PROD_IMAGE : DEV_IMAGE
+                        def containerName = env.ACTUAL_BRANCH == 'main' ? "app-main" : "app-dev"
+                        def portMapping = env.ACTUAL_BRANCH == 'main' ? "80:80" : "8080:80"
+
+                        echo "🚀 Deploying ${env.ACTUAL_BRANCH} container '${containerName}' on EC2 ${EC2_HOST}"
+
+                        withCredentials([sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'SSH_KEY_PATH')]) {
+                            sh """
+                                ssh -i $SSH_KEY_PATH -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} \\
+                                'docker pull ${imageName}:latest &&
+                                 docker stop ${containerName} || true &&
+                                 docker rm ${containerName} || true &&
+                                 docker run -d --name ${containerName} -p ${portMapping} ${imageName}:latest'
+                            """
+                        }
                     } else {
                         echo "⚠️ Skipping deployment for branch: ${env.ACTUAL_BRANCH}"
                     }
@@ -75,10 +82,10 @@ pipeline {
         stage('Health Check') {
             steps {
                 script {
-                    if (env.ACTUAL_BRANCH == 'main') {
-                        echo "🩺 Performing health check..."
-                        // Add your health check logic here (example)
-                        // sh "curl -f http://<EC2-IP> || exit 1"
+                    if (env.ACTUAL_BRANCH in ['dev', 'main']) {
+                        def port = env.ACTUAL_BRANCH == 'main' ? "80" : "8080"
+                        echo "💡 Running health check on ${EC2_HOST}:${port}"
+                        sh "curl -f http://${EC2_HOST}:${port} || echo 'Health check failed!'"
                     } else {
                         echo "⚠️ Skipping health check for branch: ${env.ACTUAL_BRANCH}"
                     }
@@ -96,4 +103,3 @@ pipeline {
         }
     }
 }
-
