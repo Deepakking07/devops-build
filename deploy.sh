@@ -1,20 +1,20 @@
 #!/bin/bash
-echo "🚀 Detected branch: $GIT_BRANCH"
-echo "🔑 Using SSH key: ./jenkins-key.pem"
+echo "🚀 Detected branch: origin/main"
+echo "🔑 Using SSH key: /var/lib/jenkins/jenkins-key.pem"
 echo "🎯 React server: 3.235.191.91"
-echo "🔄 Deploying from repository: $DOCKER_REPO"
+echo "🔄 Deploying: $DOCKER_REPO"
 
-ssh -i ./jenkins-key.pem -o StrictHostKeyChecking=no ec2-user@3.235.191.91 "
-    echo '🔄 Stopping existing container...'
-    docker stop react-app || true
-    docker rm react-app || true
+ssh -i /var/lib/jenkins/jenkins-key.pem -o StrictHostKeyChecking=no ec2-user@3.235.191.91 "
+    echo '🔄 Stopping container...'
+    sudo docker stop react-app || true
+    sudo docker rm react-app || true
     
-    echo '📥 Pulling latest image...'
-    docker pull $DOCKER_REPO:latest
+    echo '📥 Pulling image...'
+    sudo docker pull $DOCKER_REPO:latest
     
-    echo '🏃 Starting new container...'
-    docker run -d --name react-app -p 80:80 $DOCKER_REPO:latest
+    echo '🏃 Starting container...'
+    sudo docker run -d --name react-app -p 80:80 $DOCKER_REPO:latest
     
-    echo '✅ Deployment complete!'
-    docker ps | grep react-app
+    echo '✅ Deployed!'
+    sudo docker ps | grep react-app
 "
