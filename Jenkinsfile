@@ -50,11 +50,11 @@ pipeline {
                             break
                         case 'master':
                         case 'main':
-                            env.DOCKER_REPO = 'deepakk007/project3-prod'
+                            env.DOCKER_REPO = 'deepakk007/project3-dev'
                             env.ENVIRONMENT = 'production'
                             break
                         default:
-                            env.DOCKER_REPO = 'deepakk007/project3-prod'
+                            env.DOCKER_REPO = 'deepakk007/project3-dev'
                             env.ENVIRONMENT = 'production'
                     }
 
