@@ -45,16 +45,16 @@ pipeline {
 
                     switch(detectedBranch) {
                         case 'dev':
-                            env.DOCKER_REPO = 'deepakk007/project3-dev'
+                            env.DOCKER_REPO = 'deepakk007/project3-prod'
                             env.ENVIRONMENT = 'development'
                             break
                         case 'master':
                         case 'main':
-                            env.DOCKER_REPO = 'deepakk007/project3-dev'
+                            env.DOCKER_REPO = 'deepakk007/project3-prod'
                             env.ENVIRONMENT = 'production'
                             break
                         default:
-                            env.DOCKER_REPO = 'deepakk007/project3-dev'
+                            env.DOCKER_REPO = 'deepakk007/project3-prod'
                             env.ENVIRONMENT = 'production'
                     }
 
