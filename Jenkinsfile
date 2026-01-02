@@ -5,6 +5,8 @@ pipeline {
         DOCKER_HUB_CREDS = credentials('docker-hub-credentials')
         DOCKER_USERNAME = "${DOCKER_HUB_CREDS_USR}"
         DOCKER_PASSWORD = "${DOCKER_HUB_CREDS_PSW}"
+        EC2_HOST = '3.235.191.91'
+        EC2_USER = 'ec2-user'
     }
     
     triggers {
@@ -25,9 +27,9 @@ pipeline {
                         if [ -f "/var/lib/jenkins/jenkins-key.pem" ]; then
                             cp /var/lib/jenkins/jenkins-key.pem ./jenkins-key.pem
                             chmod 600 ./jenkins-key.pem
-                            echo "✅ SSH key copied to workspace"
+                            echo "✅ SSH key copied"
                         else
-                            echo "❌ SSH key not found"
+                            echo "❌ SSH key missing - check /var/lib/jenkins/"
                             exit 1
                         fi
                     '''
@@ -35,52 +37,98 @@ pipeline {
             }
         }
         
-        stage('Determine Branch') {
+        stage('Determine Branch & Repo') {
             steps {
                 script {
-                    def detectedBranch = env.BRANCH_NAME ?: env.GIT_BRANCH ?: sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
-                    detectedBranch = detectedBranch?.replaceAll('origin/', '')
+                    def branch = env.BRANCH_NAME ?: sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
+                    branch = branch.replaceAll('origin/', '')
                     
-                    echo "🌟 Detected branch: ${detectedBranch}"
-
-                    switch(detectedBranch) {
-                        case 'dev':
-                            env.DOCKER_REPO = 'deepakk007/project3-prod'
-                            env.ENVIRONMENT = 'development'
-                            break
-                        case 'master':
-                        case 'main':
-                            env.DOCKER_REPO = 'deepakk007/project3-prod'
-                            env.ENVIRONMENT = 'production'
-                            break
-                        default:
-                            env.DOCKER_REPO = 'deepakk007/project3-prod'
-                            env.ENVIRONMENT = 'production'
+                    echo "🌟 Branch detected: ${branch}"
+                    
+                    if (branch == 'dev') {
+                        env.DOCKER_REPO = "${DOCKER_USERNAME}/project3-dev"
+                        env.ENVIRONMENT = 'development'
+                    } else {
+                        env.DOCKER_REPO = "${DOCKER_USERNAME}/project3-prod"
+                        env.ENVIRONMENT = 'production'
                     }
-
-                    echo "🐳 Docker repository: ${env.DOCKER_REPO}"
-                    echo "🏗️ Environment: ${env.ENVIRONMENT}"
+                    
+                    def timestamp = sh(script: 'date +%Y%m%d-%H%M%S', returnStdout: true).trim()
+                    env.IMAGE_TAG = "${timestamp}"
+                    env.FULL_IMAGE = "${DOCKER_REPO}:${IMAGE_TAG}"
+                    env.LATEST_IMAGE = "${DOCKER_REPO}:latest"
+                    
+                    echo "🐳 Repo: ${env.DOCKER_REPO}"
+                    echo "🏷️  Tag: ${env.FULL_IMAGE}"
                 }
             }
         }
         
-        stage('Build and Push') {
+        stage('Docker Login') {
             steps {
-                sh 'chmod +x build.sh && ./build.sh'
+                sh '''
+                    echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin
+                    echo "✅ Docker Hub login successful"
+                '''
+            }
+        }
+        
+        stage('Build Docker Image') {
+            steps {
+                sh """
+                    docker build -t ${FULL_IMAGE} .
+                    docker tag ${FULL_IMAGE} ${LATEST_IMAGE}
+                    echo "✅ Built ${FULL_IMAGE}"
+                """
+            }
+        }
+        
+        stage('Push to Docker Hub') {
+            steps {
+                sh """
+                    docker push ${FULL_IMAGE}
+                    docker push ${LATEST_IMAGE}
+                    echo "✅ Pushed to ${DOCKER_REPO}"
+                """
             }
         }
         
         stage('Deploy to EC2') {
             steps {
-                sh 'chmod +x deploy.sh && ./deploy.sh'
+                sh """
+                    ssh -i jenkins-key.pem -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} "
+                        docker pull ${LATEST_IMAGE}
+                        docker stop react-app || true
+                        docker rm react-app || true
+                        docker run -d --name react-app -p 80:80 ${LATEST_IMAGE}
+                        docker image prune -f
+                    "
+                    echo "✅ Deployed ${LATEST_IMAGE} to ${ENVIRONMENT}"
+                """
+            }
+        }
+        
+        stage('Health Check') {
+            steps {
+                sh """
+                    sleep 10
+                    if curl -f http://${EC2_HOST}; then
+                        echo "✅ Health check PASSED - App LIVE!"
+                    else
+                        echo "❌ Health check FAILED"
+                        exit 1
+                    fi
+                """
             }
         }
         
         stage('Clean Up') {
             steps {
                 sh '''
-                    docker images | grep "deepakk007/project3" | awk "{print \$3}" | xargs -r docker rmi || true
-                    docker image prune -f || true
+                    docker logout
+                    docker rmi $(docker images -q deepakk007/project3*) 2>/dev/null || true
+                    rm -f jenkins-key.pem
+                    echo "🧹 Cleanup complete"
                 '''
             }
         }
@@ -88,14 +136,20 @@ pipeline {
     
     post {
         success {
-            echo "🎉 SUCCESS: ${env.ENVIRONMENT} deployment!"
-            echo "🐳 Image: ${env.DOCKER_REPO}:latest"
+            echo "🎉 ${ENVIRONMENT.toUpperCase()} DEPLOYMENT SUCCESS!"
+            echo "🐳 Images: ${FULL_IMAGE} & ${LATEST_IMAGE}"
+            echo "🌐 Live: http://${EC2_HOST}"
         }
         failure {
-            echo "💥 FAILED: ${env.ENVIRONMENT} deployment!"
+            echo "💥 ${ENVIRONMENT.toUpperCase()} DEPLOYMENT FAILED!"
+            emailext (
+                to: 'your-email@example.com',
+                subject: "Jenkins FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: "Check: ${env.BUILD_URL}"
+            )
         }
         always {
-            echo "🏁 Pipeline finished"
+            echo "🏁 Pipeline complete"
         }
     }
 }
