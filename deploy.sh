@@ -4,9 +4,9 @@ set -e
 # YOUR Project Details
 DEV_REPO="deepakk007/project3-dev"
 PROD_REPO="deepakk007/project3-prod"
-SSH_KEY="./jenkins-key.pem"  # Pipeline copies this
+SSH_KEY="./devops-key.pem"  # ← CHANGED: Matches Jenkinsfile
 SERVER_USER="ec2-user"
-SERVER_IP="3.235.191.91"     # YOUR EC2
+SERVER_IP="3.235.191.91"
 
 # Get branch
 if [ -n "$GIT_BRANCH" ]; then
@@ -17,7 +17,7 @@ fi
 
 echo "Deploying branch: $CURRENT_BRANCH"
 
-# Select repo
+# Select repo - FIXED SYNTAX
 if [ "$CURRENT_BRANCH" == "dev" ] || [ "$CURRENT_BRANCH" == "origin/dev" ]; then
     REPO=$DEV_REPO
 elif [ "$CURRENT_BRANCH" == "master" ] || [ "$CURRENT_BRANCH" == "origin/master" ] || [ "$CURRENT_BRANCH" == "main" ] || [ "$CURRENT_BRANCH" == "origin/main" ]; then
@@ -29,7 +29,7 @@ fi
 
 echo "Deploying $REPO to $SERVER_IP"
 
-# Deploy script
+# Deploy - CHANGED KEY NAME
 ssh -i $SSH_KEY -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_IP "
     echo '$DOCKER_PASSWORD' | docker login -u $DOCKER_USERNAME --password-stdin &&
     docker pull $REPO:latest &&
