@@ -1,65 +1,49 @@
 #!/bin/bash
 
-# Exit immediately if a command exits with a non-zero status
 set -e
 
-# Configuration - YOUR DETAILS
+# YOUR Project Details
 IMAGE_NAME="deepakk007/project3"
 DEV_REPO="deepakk007/project3-dev"
-PROD_REPO="deepakk007/project3-prod"  # YOUR Docker Hub repo
+PROD_REPO="deepakk007/project3-prod"
 
-# Get the current branch - handle Jenkins environment
+# Get current branch
 if [ -n "$GIT_BRANCH" ]; then
-    # Use Jenkins environment variable if available
     CURRENT_BRANCH="$GIT_BRANCH"
 else
-    # Fallback to git command
     CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 fi
 
 TAG=$(date +%Y%m%d-%H%M%S)
-echo "🚀 Building from branch: $CURRENT_BRANCH"
-echo "📦 Tag: $TAG"
+echo "Building from branch: $CURRENT_BRANCH"
 
-echo "🐳 Building Docker image..."
+echo "Building Docker image..."
 docker build -t $IMAGE_NAME:$TAG .
 
-# Authenticate with Docker Hub using environment variables (Jenkins credentials)
+# Docker Hub login
 if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
-    echo "🔐 Logging in to Docker Hub..."
     echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
-else
-    echo "⚠️ Warning: Docker Hub credentials not provided. Using existing authentication."
 fi
 
-# Tag for appropriate repository based on branch
+# Branch logic for YOUR repos
 if [ "$CURRENT_BRANCH" == "dev" ] || [ "$CURRENT_BRANCH" == "origin/dev" ]; then
-    echo "🔄 Tagging image for dev repository..."
+    echo "Tagging for dev..."
     docker tag $IMAGE_NAME:$TAG $DEV_REPO:$TAG
     docker tag $IMAGE_NAME:$TAG $DEV_REPO:latest
-    
-    echo "📤 Pushing to dev repository..."
     docker push $DEV_REPO:$TAG
     docker push $DEV_REPO:latest
-    
-    echo "✅ Image successfully pushed to development repository: $DEV_REPO"
+    echo "✅ Dev push: $DEV_REPO:latest"
     
 elif [ "$CURRENT_BRANCH" == "master" ] || [ "$CURRENT_BRANCH" == "origin/master" ] || [ "$CURRENT_BRANCH" == "main" ] || [ "$CURRENT_BRANCH" == "origin/main" ]; then
-    echo "🔄 Tagging image for production repository..."
+    echo "Tagging for prod..."
     docker tag $IMAGE_NAME:$TAG $PROD_REPO:$TAG
     docker tag $IMAGE_NAME:$TAG $PROD_REPO:latest
-    
-    echo "📤 Pushing to production repository..."
     docker push $PROD_REPO:$TAG
     docker push $PROD_REPO:latest
-    
-    echo "✅ Image successfully pushed to production repository: $PROD_REPO"
-    
+    echo "✅ Prod push: $PROD_REPO:latest"
 else
-    echo "❌ Branch '$CURRENT_BRANCH' is not supported."
-    echo "✅ Supported branches: dev, master, main (with or without origin/ prefix)"
+    echo "❌ Branch '$CURRENT_BRANCH' not supported"
     exit 1
 fi
 
-echo "🎉 Build process completed successfully!"
-echo "🐳 Latest image: $PROD_REPO:latest (or $DEV_REPO:latest)"
+echo "🎉 Build complete!"
